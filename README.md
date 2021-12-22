@@ -1,0 +1,2 @@
+# Laravel Sync Database
+
