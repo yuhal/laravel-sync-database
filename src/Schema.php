@@ -2,20 +2,16 @@
 
 namespace Yuhal\SyncDatabase;
 
-use Carbon\Carbon;
 use Spatie\Regex\Regex;
 use Illuminate\Support\Str;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
-use Illuminate\Support\Facades\Schema as LaravelSchema;
 use Illuminate\Support\Facades\Config;
-use Illuminate\Database\Schema\Blueprint;
 use MigrationsGenerator\Generators\ColumnGenerator;
 use MigrationsGenerator\Generators\IndexGenerator;
 use MigrationsGenerator\Generators\FilenameGenerator;
 use MigrationsGenerator\MigrationsGeneratorSetting;
-use MigrationsGenerator\Generators\Writer\MigrationStub;
 use MigrationsGenerator\Generators\Writer\MigrationWriter;
 
 class Schema
@@ -31,19 +27,31 @@ class Schema
      * @param $schema
      * @param $writeIn
      */
-    public function __construct($schema, SyncDatabaseCommand $writeIn)
+    public function __construct($schema, $file, SyncDatabaseCommand $writeIn)
     {
         $this->schema = $schema;
+        $this->file = $file;
         $this->writeIn = $writeIn;
-
         $this->name = $this->getName($schema->group(1));
         $this->table = DB::getTablePrefix() . $this->name;
+        $connection = Config::get('database.default');
+        $this->setting = app(MigrationsGeneratorSetting::class);
+        $this->setting->setConnection($connection);
+        $this->setting->setIgnoreIndexNames(false);
+        $this->setting->setIgnoreForeignKeyNames(false);
+        $this->setting->setUseDBCollation(false);
+        $this->setting->setStubPath(Config::get('generators.config.migration_template_path'));
+        $this->setting->setTableFilename(Config::get('generators.config.filename_pattern.table'));
+        $this->tableMigration = new TableMigration(
+            app(ColumnGenerator::class),
+            app(IndexGenerator::class),
+            $this->setting,
+        );
     }
 
     public function process()
     {
-        $action = $this->tabeExist() ? 'sync' : 'generate';
-
+        $action = 'sync';
         $this->$action();
     }
 
@@ -53,130 +61,36 @@ class Schema
         return $this->writeIn;
     }
 
-    protected function generate()
-    {
-        if($this->columnsList()->isEmpty()) {
-            return $this->output()->error("Table <fg=black;bg=white> {$this->table} </> does not have any columns");
-        }
-
-        LaravelSchema::create($this->name, function (Blueprint $table) {
-            eval($this->schema->group(2));
-        });
-
-        $this->output()->warn("New table <fg=white;bg=green> {$this->table} </> was created");
-    }
-
     protected function sync()
     {
-        $connection = Config::get('database.default');
-        $setting = app(MigrationsGeneratorSetting::class);
-        $setting->setConnection($connection);
-        $setting->setUseDBCollation(false);
-        $setting->setStubPath(Config::get('generators.config.migration_template_path'));
-        $setting->setTableFilename(Config::get('generators.config.filename_pattern.table'));
-        $tableMigration = new TableMigration(
-            app(ColumnGenerator::class),
-            app(IndexGenerator::class),
-            $setting,
-        );
-        $schemaUnsyncedColumns = $this->schemaUnsyncedColumns()->toArray();
-        $dbUnsyncedColumns = $this->dbUnsyncedColumns()->toArray();
+        $schemaUnsyncedColumns = array_values($this->schemaUnsyncedColumns()->toArray());
+        $dbUnsyncedColumns = array_values($this->dbUnsyncedColumns()->toArray());
         
-        if ($dbUnsyncedColumns && $schemaUnsyncedColumns) {
-            foreach ($schemaUnsyncedColumns as $migrate => $column) {
-                $schemaUnsyncedColumns[$migrate] = [];
-                $schemaUnsyncedColumns[$migrate]['column'] = current($column);
-                $schemaUnsyncedColumns[$migrate]['migrate'] = $migrate;
-            }
-            $schemaUnsyncedColumns = array_values($schemaUnsyncedColumns);
-            foreach ($this->writeIn->files as $tableFilename => $tablePath) {
-                $tableFilenameArr = explode('_', $tableFilename);
-                array_pop($tableFilenameArr);
-                $name = implode('_', array_slice($tableFilenameArr, 5));
-                if ($name==$this->name) {
-                    $table = DB::getDoctrineSchemaManager()->listTableDetails($name);
-                    $indexes = $table->getIndexes();
-                    $columns = $table->getColumns();
-                    foreach ($dbUnsyncedColumns as $column => $type) {
-                        if (isset($columns[$column])) {
-                            $dbUnsyncedColumns[$column] = [];
-                            $dbUnsyncedColumns[$column]['column'] = $column;
-                            $dbUnsyncedColumns[$column]['type'] = $type;
-                            $dbUnsyncedColumns[$column]['migrate'] = $tableMigration->column(
-                                $table, [$columns[$column]], $indexes)->toString();
-                        } else {
-                            unset($dbUnsyncedColumns[$column]);
-                        }
-                    }
-                    if ($dbUnsyncedColumns) {
-                        $this->output()->info($tablePath);
-                        $dbUnsyncedColumns = array_values($dbUnsyncedColumns);
-                        $content = File::get($tablePath);
-                        foreach ($schemaUnsyncedColumns as $key => $value) {
-                            $search = $schemaUnsyncedColumns[$key]['migrate'];
-                            $replace = rtrim($dbUnsyncedColumns[$key]['migrate'], ';');
-                            $this->output()->info("before replace migrate column:\n".$search);
-                            $this->output()->info("after replace migrate column:\n".$replace);
-                            $content = str_replace($search, $replace, $content);
-                        }
-                        File::replace($tablePath, $content);
-                    }
-                }
-            }
-        } elseif ($schemaUnsyncedColumns) {
-            foreach ($schemaUnsyncedColumns as $migrate => $column) {
-                $schemaUnsyncedColumns[$migrate] = [];
-                $schemaUnsyncedColumns[$migrate]['column'] = current($column);
-                $schemaUnsyncedColumns[$migrate]['migrate'] = $migrate;
-            }
-            $schemaUnsyncedColumns = array_values($schemaUnsyncedColumns);
-            foreach ($this->writeIn->files as $tableFilename => $tablePath) {
-                $tableFilenameArr = explode('_', $tableFilename);
-                array_pop($tableFilenameArr);
-                $name = implode('_', array_slice($tableFilenameArr, 5));
-                if ($name==$this->name) {
-                    $table = DB::getDoctrineSchemaManager()->listTableDetails($name);
-                    $indexes = $table->getIndexes();
-                    $columns = $table->getColumns();
-                    $this->output()->info($tablePath);
-                    $content = File::get($tablePath);
-                    foreach ($schemaUnsyncedColumns as $key => $value) {
-                        $search = $schemaUnsyncedColumns[$key]['migrate'].';';
-                        $this->output()->info("Delete migrate column:\n".$search);
-                        // $content = preg_replace('/(\n)( *|	*)(\$table->string\(\'tese\', 22\)->nullable\(\)->comment\(\'测试5\'\);)/', null, $content);
-                        $content = rmStrLine($content, $search);
-                    }
-                    File::replace($tablePath, $content);
-                }
-            }
-        } elseif ($dbUnsyncedColumns) {
+        if ($dbUnsyncedColumns || $schemaUnsyncedColumns) {
             $migrationWriter = app(MigrationWriter::class);
             $filenameGenerator = app(FilenameGenerator::class);
-            foreach ($this->writeIn->files as $tableFilename => $tablePath) {
-                $tableFilenameArr = explode('_', $tableFilename);
-                array_pop($tableFilenameArr);
-                $name = implode('_', array_slice($tableFilenameArr, 5));
-                if ($name==$this->name) {
-                    $table = DB::getDoctrineSchemaManager()->listTableDetails($name);
-                    $indexes = $table->getIndexes();
-                    $columns = $table->getColumns();
-                    $up = $tableMigration->up($table, $columns, $indexes);
-                    $down = $tableMigration->down($table);
-                    $migrationWriter->writeTo(
-                        $tablePath,
-                        $setting->getStubPath(),
-                        $filenameGenerator->makeTableClassName($name),
-                        $up,
-                        $down
-                    );
-                    $this->output()->info($tablePath);
-                    foreach ($dbUnsyncedColumns as $column => $type) {
-                        if (isset($columns[$column])) {
-                            $this->output()->info("Add migrate column:\n".$tableMigration->column(
-                                $table, [$columns[$column]], $indexes)->toString());
-                        }
-                    }
-                }
+            $table = DB::getDoctrineSchemaManager()->listTableDetails($this->name);
+            $indexes = $table->getIndexes();
+            $columns = $table->getColumns();
+            $up = $this->tableMigration->up($table, $columns, $indexes);
+            $down = $this->tableMigration->down($table);
+            $migrationWriter->writeTo(
+                $this->file,
+                $this->setting->getStubPath(),
+                $filenameGenerator->makeTableClassName($this->name),
+                $up,
+                $down
+            );
+            $this->output()->info($this->file);
+            foreach ($dbUnsyncedColumns as $column) {
+                $this->output()->info(
+                    "Add migration column: <fg=black;bg=white>".$column['column']."</>"
+                );
+            }
+            foreach ($schemaUnsyncedColumns as $column) {
+                $this->output()->info(
+                    "Delete migration column: <fg=black;bg=yellow>".$column['column'][0]."</>"
+                );
             }
         }
     }
@@ -194,10 +108,7 @@ class Schema
 
     protected function dbUnsyncedColumns()
     {
-        
-        
         return $this->dbColumns()->reject(function ($type, $column) {
-            
             return $this->columnsList()->values()->flatten()->contains($column);
         });
     }
@@ -205,16 +116,25 @@ class Schema
     protected function schemaUnsyncedColumns()
     {
         return $this->columnsList()->reject(function ($column) {
-            
-            return $this->dbColumns()->has($column);
+            return $this->dbColumns()->has($column['column']);
         });
     }
 
     protected function dbColumns()
     {
+        $table = DB::getDoctrineSchemaManager()->listTableDetails($this->table);
+        $indexes = $table->getIndexes();
+        $columns = $table->getColumns();
         return Collection::make(DB::select('DESCRIBE ' . $this->table))
-            ->mapWithKeys(function ($column) {
-            return [$column->Field => $column->Type];
+            ->mapWithKeys(function ($column) use ($table, $indexes, $columns)  {
+            return [
+                $column->Field => [
+                    'column' => $column->Field,
+                    'type' => $column->Type,
+                    'migrate' => $this->tableMigration->column(
+                        $table, [$columns[$column->Field]], $indexes)->toString()
+                ],
+            ];
         });
     }
 
@@ -231,9 +151,13 @@ class Schema
                 $column = Regex::match('~(["\'])([^"\']+)\1~', $line);
                 $column = $column->hasMatch() ? $column->group(2) : null;
                 $types = $this->columnsTypes($column);
-                $type = Regex::match('/\$.*->(.*)\(/', $line)->group(1);
-
-                return [$line => in_array($type, array_keys($types)) ? $types[$type] : [$column]];
+                $type = Regex::match('/\$.*?->(.*?)\(/', $line)->group(1);
+                return [
+                    $line => [
+                        'column' => in_array($type, array_keys($types)) ? $types[$type] : [$column],
+                        'migrate' => $line,
+                    ]
+                ];
             } catch (\Exception $e) {
                 return [];
             }
@@ -255,10 +179,5 @@ class Schema
             'nullableUuidMorphs' => ["{$column}_id", "{$column}_type"],
             'nullableMorphs' => ["{$column}_id", "{$column}_type"],
         ];
-    }
-    
-    protected function tabeExist()
-    {
-        return DB::getSchemaBuilder()->hasTable($this->name);
     }
 }
