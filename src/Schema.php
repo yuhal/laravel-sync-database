@@ -11,7 +11,6 @@ use Illuminate\Support\Facades\Config;
 use MigrationsGenerator\Generators\ColumnGenerator;
 use MigrationsGenerator\Generators\IndexGenerator;
 use MigrationsGenerator\Generators\FilenameGenerator;
-use MigrationsGenerator\MigrationsGeneratorSetting;
 use MigrationsGenerator\Generators\Writer\MigrationWriter;
 
 class Schema
@@ -30,22 +29,16 @@ class Schema
     public function __construct($schema, $file, SyncDatabaseCommand $writeIn)
     {
         $this->schema = $schema;
+        
         $this->file = $file;
         $this->writeIn = $writeIn;
-        $this->name = $this->getName($schema->group(1));
+        $this->name = $this->writeIn->getTableName($schema->group(1));
         $this->table = DB::getTablePrefix() . $this->name;
-        $connection = Config::get('database.default');
-        $this->setting = app(MigrationsGeneratorSetting::class);
-        $this->setting->setConnection($connection);
-        $this->setting->setIgnoreIndexNames(false);
-        $this->setting->setIgnoreForeignKeyNames(false);
-        $this->setting->setUseDBCollation(false);
-        $this->setting->setStubPath(Config::get('generators.config.migration_template_path'));
-        $this->setting->setTableFilename(Config::get('generators.config.filename_pattern.table'));
+        $this->writeIn->setting->setTableFilename(Config::get('generators.config.filename_pattern.table'));
         $this->tableMigration = new TableMigration(
             app(ColumnGenerator::class),
             app(IndexGenerator::class),
-            $this->setting,
+            $this->writeIn->setting,
         );
     }
 
@@ -65,7 +58,7 @@ class Schema
     {
         $schemaUnsyncedColumns = array_values($this->schemaUnsyncedColumns()->toArray());
         $dbUnsyncedColumns = array_values($this->dbUnsyncedColumns()->toArray());
-        
+
         if ($dbUnsyncedColumns || $schemaUnsyncedColumns) {
             $migrationWriter = app(MigrationWriter::class);
             $filenameGenerator = app(FilenameGenerator::class);
@@ -76,7 +69,7 @@ class Schema
             $down = $this->tableMigration->down($table);
             $migrationWriter->writeTo(
                 $this->file,
-                $this->setting->getStubPath(),
+                $this->writeIn->setting->getStubPath(),
                 $filenameGenerator->makeTableClassName($this->name),
                 $up,
                 $down
@@ -93,17 +86,6 @@ class Schema
                 );
             }
         }
-    }
-
-    protected function getName($name)
-    {
-        //TODO: https://github.com/yuhal/laravel-sync-migration/issues/2
-        if(preg_match('/[\'|"]\s?\.\s?\$/', $name) || preg_match('/\$[a-zA-z0-9-_]+\s?\.\s?[\'|"]/', $name)) {
-            $this->output()->error("Using variables as table names (<fg=black;bg=white> {$name} </>) is not supported currentlly, see <href=https://github.com/yuhal/laravel-sync-migration/issues/2> issue#2 </>");
-            exit;
-        }
-
-        return str_replace(['\'', '"'], '', $name);
     }
 
     protected function dbUnsyncedColumns()
