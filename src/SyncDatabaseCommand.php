@@ -9,6 +9,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Schema as LaravelSchema;
 use Illuminate\Database\Migrations\Migrator;
 use Illuminate\Database\Migrations\MigrationRepositoryInterface;
 use Illuminate\Database\Console\Migrations\BaseCommand;
@@ -31,6 +32,7 @@ class SyncDatabaseCommand extends BaseCommand
      * @var string
      */
     protected $signature = 'database:sync';
+
     /**
      * The console command description.
      *
@@ -40,16 +42,30 @@ class SyncDatabaseCommand extends BaseCommand
 
     protected $schemas;
 
+    /**
+     * Ignore the migrated tables
+     *
+     * @var string
+     */
     protected $ignore = [
         'migrations', 
         'telescope_entries', 
         'telescope_entries_tags', 
-        'telescope_monitoring', 
-        'failed_jobs'
+        'telescope_monitoring'
     ];
 
+    /**
+     * All migration files
+     *
+     * @var string
+     */
     public $files;
 
+    /**
+     * Migrations generator setting
+     *
+     * @var string
+     */
     public $setting;
 
     /**
@@ -80,8 +96,12 @@ class SyncDatabaseCommand extends BaseCommand
      */
     public function handle()
     {
-        $this->files = $this->migrator->getMigrationFiles($this->getMigrationPaths());
+        if (!$this->initMigrate()) {
+            Artisan::call("migrate");
+        }
 
+        $this->files = $this->getMigrationFiles();
+        
         $this->unDeletedMigrates()->each(function ($table) {
             DB::beginTransaction();
             $this->setting->setTableFilename(
@@ -91,7 +111,12 @@ class SyncDatabaseCommand extends BaseCommand
             $className = basename($path, '.php');
             File::delete($path);
             unset($this->files[$className]);
-            $this->repository->delete(json_decode("{\"migration\":\"{$className}\"}"));
+            try {
+                $this->repository->delete(json_decode("{\"migration\":\"{$className}\"}"));
+            } catch (\Exception $e) {
+                $this->error($e->getMessage());
+                exit;
+            }
             if (!file_exists($path) && !isset($this->files[$className])) {
                 $this->info("Delete migration file for <fg=black;bg=white>{$table}</>");
                 DB::commit();
@@ -112,11 +137,16 @@ class SyncDatabaseCommand extends BaseCommand
             );
             $path = $this->makeFilename($this->setting->getTableFilename(), $table);
             $fileName = basename($path);
+            $className = rtrim($fileName, '.php');
+            try {
+                $this->repository->log($className, $this->repository->getNextBatchNumber());
+            } catch (\Exception $e) {
+                $this->error($e->getMessage());
+                exit;
+            }
             Artisan::call("
                 migrate:generate {$table} --no-interaction --table-filename='{$fileName}'
             ");
-            $className = rtrim($fileName, '.php');
-            $this->repository->log($className, $this->repository->getNextBatchNumber());
             if (file_exists($path)) {
                 $this->info("Create migration file for <fg=black;bg=white>{$table}</>");
                 DB::commit();
@@ -126,18 +156,19 @@ class SyncDatabaseCommand extends BaseCommand
         })->isEmpty() && $this->syncedOrNot();
     }
 
+    protected function initMigrate()
+    {
+        foreach ($this->ignore as $table) {
+            if (!LaravelSchema::hasTable($table)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     protected function syncedOrNot()
     {
         return !$this->schemas->pluck('synced')->contains(true) && $this->info('Nothing to sync.');
-    }
-
-    protected function tables()
-    {
-        return Collection::make(DB::select('SHOW TABLES'))->map(function ($table) {
-            return array_values((array)$table);
-        })->reject(function ($table) {
-            return in_array(current($table), $this->ignore);
-        })->flatten();
     }
 
     protected function processDatabase($content, $file)
@@ -150,12 +181,32 @@ class SyncDatabaseCommand extends BaseCommand
         }
     }
 
+    protected function tables()
+    {
+        return Collection::make(DB::select('SHOW TABLES'))->map(function ($table) {
+            return array_values((array)$table);
+        })->reject(function ($table) {
+            return in_array(current($table), $this->ignore);
+        })->flatten();
+    }
+
     protected function getAllSchemas($content)
     {   
         return array_merge(
             Regex::matchAll('/Schema::create\s*\((.*)\,.*{(.*)}\);/sU', $content)->results(),
-            Regex::matchAll('/Schema::table\s*\((.*)\,.*{(.*)}\);/sU', $content)->results()
+            Regex::matchAll('/Schema::table\s*\((.*)\,.*{(.*)}\);/sU', $content)->results(),
+            Regex::matchAll('/\$this->schema->create\s*\((.*)\,.*{(.*)}\);/sU', $content)->results()
         );
+    }
+
+    protected function getMigrationFiles()
+    {   
+        return Collection::make($this->migrator->getMigrationFiles($this->getMigrationPaths()))
+        ->mapWithKeys(function ($path, $file) { 
+            return [$file => $path];
+        })->reject(function ($path, $file) {
+            return in_array($this->fileToName($path), $this->ignore);
+        });
     }
 
     /**
@@ -189,15 +240,6 @@ class SyncDatabaseCommand extends BaseCommand
         $schemas = $this->getAllSchemas($content);
         foreach ($schemas as $schema) {
             return $this->getTableName($schema->group(1));
-        }
-    }
-
-    protected function nameToPath($name)
-    {
-        foreach ($this->files as $file => $path) {
-            if ($this->fileToName($file) == $name) {
-                return $path;
-            }
         }
     }
 
