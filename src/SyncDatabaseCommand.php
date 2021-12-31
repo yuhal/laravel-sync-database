@@ -96,9 +96,12 @@ class SyncDatabaseCommand extends BaseCommand
      */
     public function handle()
     {
+        var_dump('<pre>',$this->repository->getRan());exit;
         if (!$this->initMigrate()) {
             Artisan::call("migrate");
         }
+
+        $this->initSyncLog();
 
         $this->files = $this->getMigrationFiles();
         
@@ -139,7 +142,7 @@ class SyncDatabaseCommand extends BaseCommand
             $fileName = basename($path);
             $className = rtrim($fileName, '.php');
             try {
-                $this->repository->log($className, $this->repository->getNextBatchNumber());
+                $this->repository->log($className, 0);
             } catch (\Exception $e) {
                 $this->error($e->getMessage());
                 exit;
@@ -164,6 +167,19 @@ class SyncDatabaseCommand extends BaseCommand
             }
         }
         return true;
+    }
+
+    protected function initSyncLog()
+    {
+        foreach ($this->tables() as $table) {
+            $this->setting->setTableFilename(
+                Config::get('generators.config.filename_pattern.table')
+            );
+            $path = $this->makeFilename($this->setting->getTableFilename(), $table);
+            $fileName = basename($path);
+            $className = rtrim($fileName, '.php');
+            $this->repository->log($className, 0);
+        }
     }
 
     protected function syncedOrNot()
