@@ -96,7 +96,6 @@ class SyncDatabaseCommand extends BaseCommand
      */
     public function handle()
     {
-        var_dump('<pre>',$this->repository->getRan());exit;
         if (!$this->initMigrate()) {
             Artisan::call("migrate");
         }
