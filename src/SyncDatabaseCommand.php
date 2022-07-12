@@ -110,6 +110,7 @@ class SyncDatabaseCommand extends BaseCommand
                 Config::get('generators.config.filename_pattern.table')
             );
             $path = $this->makeFilename($this->setting->getTableFilename(), $table);
+            $path = $this->getPrefixPath($path);
             $className = basename($path, '.php');
             File::delete($path);
             unset($this->files[$className]);
@@ -150,6 +151,7 @@ class SyncDatabaseCommand extends BaseCommand
                 migrate:generate {$table} --no-interaction --table-filename='{$fileName}'
             ");
             if (file_exists($path)) {
+                rename($path, $this->getPrefixPath($path));
                 $this->info("Create migration file for <fg=black;bg=white>{$table}</>");
                 DB::commit();
             } else {
@@ -299,5 +301,10 @@ class SyncDatabaseCommand extends BaseCommand
         }
 
         return str_replace(['\'', '"'], '', $name);
+    }
+
+    public function getPrefixPath($path)
+    {
+        return str_replace('migrations/create_', 'migrations/1970_01_01_000001_create_', $path);
     }
 }
