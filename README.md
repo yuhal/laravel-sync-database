@@ -117,7 +117,7 @@ New column  users->phone  was created
 - 数据库同步迁移文件
 
 ```
-$ php artisan migrate:sync
+$ php artisan database:sync
 /Users/hai/env/docker/laradock/blog/database/migrations/2014_10_12_000000_create_users_table.php
 Add migration column: mobile
 Delete migration column: phone
