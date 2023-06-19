@@ -6,7 +6,6 @@ use Spatie\Regex\Regex;
 use Illuminate\Support\Str;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Config;
 use MigrationsGenerator\Generators\ColumnGenerator;
 use MigrationsGenerator\Generators\IndexGenerator;
@@ -19,6 +18,8 @@ class Schema
     public $name;
     public $table;
     public $writeIn;
+    public $file;
+    public $tableMigration;
     public $synced = false;
 
     /**
@@ -38,7 +39,7 @@ class Schema
         $this->tableMigration = new TableMigration(
             app(ColumnGenerator::class),
             app(IndexGenerator::class),
-            $this->writeIn->setting,
+            $this->writeIn->setting
         );
     }
 
@@ -56,12 +57,12 @@ class Schema
 
     protected function sync()
     {
+        $migrationWriter = app(MigrationWriter::class);
+        $filenameGenerator = app(FilenameGenerator::class);
         $schemaUnsyncedColumns = array_values($this->schemaUnsyncedColumns()->toArray());
         $dbUnsyncedColumns = array_values($this->dbUnsyncedColumns()->toArray());
-
+        
         if ($dbUnsyncedColumns || $schemaUnsyncedColumns) {
-            $migrationWriter = app(MigrationWriter::class);
-            $filenameGenerator = app(FilenameGenerator::class);
             $table = DB::getDoctrineSchemaManager()->listTableDetails($this->name);
             $indexes = $table->getIndexes();
             $columns = $table->getColumns();
@@ -77,7 +78,7 @@ class Schema
             $this->output()->info($this->file);
             foreach ($dbUnsyncedColumns as $column) {
                 $this->output()->info(
-                    "Add migration column: <fg=black;bg=white>".$column['column']."</>"
+                    "Update migration column: <fg=black;bg=white>".$column['column']."</>"
                 );
             }
             foreach ($schemaUnsyncedColumns as $column) {
@@ -91,14 +92,15 @@ class Schema
     protected function dbUnsyncedColumns()
     {
         return $this->dbColumns()->reject(function ($type, $column) {
-            return $this->columnsList()->values()->flatten()->contains($column);
+            $migrate = str_replace(';', '', $type['migrate']);
+            return $this->columnsList()->values()->pluck('migrate')->contains($migrate);
         });
     }
 
     protected function schemaUnsyncedColumns()
     {
-        return $this->columnsList()->reject(function ($column) {
-            return $this->dbColumns()->has($column['column']);
+        return $this->columnsList()->reject(function ($type) {
+            return $this->dbColumns()->has($type['column']);
         });
     }
 
