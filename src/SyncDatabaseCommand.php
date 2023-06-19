@@ -13,7 +13,6 @@ use Illuminate\Support\Facades\Schema as LaravelSchema;
 use Illuminate\Database\Migrations\Migrator;
 use Illuminate\Database\Migrations\MigrationRepositoryInterface;
 use Illuminate\Database\Console\Migrations\BaseCommand;
-use MigrationsGenerator\Generators\FilenameGenerator;
 use MigrationsGenerator\Generators\TableNameGenerator;
 use MigrationsGenerator\MigrationsGeneratorSetting;
 
@@ -42,10 +41,12 @@ class SyncDatabaseCommand extends BaseCommand
 
     protected $schemas;
 
+    protected $repository;
+
     /**
      * Ignore the migrated tables
      *
-     * @var string
+     * @var array
      */
     protected $ignore = [
         'migrations', 
@@ -57,14 +58,14 @@ class SyncDatabaseCommand extends BaseCommand
     /**
      * All migration files
      *
-     * @var string
+     * @var array
      */
     public $files;
 
     /**
      * Migrations generator setting
      *
-     * @var string
+     * @var object
      */
     public $setting;
 
@@ -103,34 +104,38 @@ class SyncDatabaseCommand extends BaseCommand
         $this->initSyncLog();
 
         $this->files = $this->getMigrationFiles();
-        
+
         $this->unDeletedMigrates()->each(function ($table) {
-            DB::beginTransaction();
-            $this->setting->setTableFilename(
-                Config::get('generators.config.filename_pattern.table')
-            );
-            $path = $this->makeFilename($this->setting->getTableFilename(), $table);
-            $path = $this->getPrefixPath($path);
-            $className = basename($path, '.php');
-            File::delete($path);
-            unset($this->files[$className]);
-            try {
-                $this->repository->delete(json_decode("{\"migration\":\"{$className}\"}"));
-            } catch (\Exception $e) {
-                $this->error($e->getMessage());
-                exit;
-            }
-            if (!file_exists($path) && !isset($this->files[$className])) {
-                $this->info("Delete migration file for <fg=black;bg=white>{$table}</>");
-                DB::commit();
-            } else {
-                DB::rollBack();
+            if ($table) {
+                DB::beginTransaction();
+                $this->setting->setTableFilename(
+                    Config::get('generators.config.filename_pattern.table')
+                );
+                $path = $this->makeFilename($this->setting->getTableFilename(), $table);
+                $path = $this->getPrefixPath($path);
+                $className = basename($path, '.php');
+                File::delete($path);
+                unset($this->files[$className]);
+                try {
+                    $this->repository->delete(json_decode("{\"migration\":\"{$className}\"}"));
+                } catch (\Exception $e) {
+                    $this->error($e->getMessage());
+                    exit;
+                }
+                if (!file_exists($path) && !isset($this->files[$className])) {
+                    $this->info("Delete migration file for <fg=black;bg=white>{$table}</>");
+                    DB::commit();
+                } else {
+                    DB::rollBack();
+                }
             }
         });
 
         foreach ($this->files as $file) {
-            $content = file_get_contents($file);
-            $this->processDatabase($content, $file);
+            if (file_exists($file)) {
+                $content = file_get_contents($file);
+                $this->processDatabase($content, $file);
+            }
         }
         
         $this->unCreatedMigrates()->each(function ($table) {
@@ -253,10 +258,12 @@ class SyncDatabaseCommand extends BaseCommand
 
     protected function fileToName($path)
     {
-        $content = file_get_contents($path);
-        $schemas = $this->getAllSchemas($content);
-        foreach ($schemas as $schema) {
-            return $this->getTableName($schema->group(1));
+        if (file_exists($path)) {
+            $content = file_get_contents($path);
+            $schemas = $this->getAllSchemas($content);
+            foreach ($schemas as $schema) {
+                return $this->getTableName($schema->group(1));
+            }
         }
     }
 
@@ -268,7 +275,7 @@ class SyncDatabaseCommand extends BaseCommand
      * @param  string  $table  Table name.
      * @return string
      */
-    private function makeFilename(string $pattern, string $table): string
+    public function makeFilename(string $pattern, string $table)
     {
         $path     = $this->setting->getPath();
         $filename = $pattern;
@@ -286,7 +293,7 @@ class SyncDatabaseCommand extends BaseCommand
      * @param  string  $table  Table name.
      * @return string Table name without prefix.
      */
-    private function stripTablePrefix(string $table): string
+    public function stripTablePrefix(string $table)
     {
         $tableNameEscaped = (string) preg_replace('/[^a-zA-Z0-9_]/', '_', $table);
         return app(TableNameGenerator::class)->stripPrefix($tableNameEscaped);
