@@ -6,6 +6,7 @@ use Spatie\Regex\Regex;
 use Illuminate\Support\Str;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Config;
 use MigrationsGenerator\Generators\ColumnGenerator;
 use MigrationsGenerator\Generators\IndexGenerator;
@@ -57,12 +58,12 @@ class Schema
 
     protected function sync()
     {
-        $migrationWriter = app(MigrationWriter::class);
-        $filenameGenerator = app(FilenameGenerator::class);
         $schemaUnsyncedColumns = array_values($this->schemaUnsyncedColumns()->toArray());
         $dbUnsyncedColumns = array_values($this->dbUnsyncedColumns()->toArray());
-        
+
         if ($dbUnsyncedColumns || $schemaUnsyncedColumns) {
+            $migrationWriter = app(MigrationWriter::class);
+            $filenameGenerator = app(FilenameGenerator::class);
             $table = DB::getDoctrineSchemaManager()->listTableDetails($this->name);
             $indexes = $table->getIndexes();
             $columns = $table->getColumns();

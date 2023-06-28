@@ -146,12 +146,7 @@ class SyncDatabaseCommand extends BaseCommand
             $path = $this->makeFilename($this->setting->getTableFilename(), $table);
             $fileName = basename($path);
             $className = rtrim($fileName, '.php');
-            try {
-                $this->repository->log($className, 0);
-            } catch (\Exception $e) {
-                $this->error($e->getMessage());
-                exit;
-            }
+            $this->logMigrate($className);
             Artisan::call("
                 migrate:generate {$table} --no-interaction --table-filename='{$fileName}'
             ");
@@ -184,7 +179,20 @@ class SyncDatabaseCommand extends BaseCommand
             $path = $this->makeFilename($this->setting->getTableFilename(), $table);
             $fileName = basename($path);
             $className = rtrim($fileName, '.php');
-            $this->repository->log($className, 0);
+            $this->logMigrate($className);
+        }
+    }
+
+    protected function logMigrate($className)
+    {
+        $className = $this->getPrefixClassName($className);
+        try {
+            if (!in_array($className, $this->repository->getRan())) {
+                $this->repository->log($className, 1);
+            }
+        } catch (\Exception $e) {
+            $this->error($e->getMessage());
+            exit;
         }
     }
 
@@ -313,5 +321,10 @@ class SyncDatabaseCommand extends BaseCommand
     public function getPrefixPath($path)
     {
         return str_replace('migrations/create_', 'migrations/1970_01_01_000001_create_', $path);
+    }
+
+    public function getPrefixClassName($className)
+    {
+        return '1970_01_01_000001_'.$className;
     }
 }
